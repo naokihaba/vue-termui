@@ -11,9 +11,16 @@ export interface ProjectColumn {
 }
 
 export interface ProjectCard {
+  assignees: string[]
+  author: string | null
+  body: string
   contentId: string | null
   contentType: 'DraftIssue' | 'Issue' | 'PullRequest' | 'Redacted'
   id: string
+  labels: string[]
+  number: number | null
+  repository: string | null
+  state: string | null
   subtitle: string
   title: string
   url: string | null
@@ -56,12 +63,20 @@ interface ProjectNode {
       content:
         | {
             __typename: 'DraftIssue'
+            assignees: { nodes: Array<{ login: string } | null> }
+            body: string
+            creator: { login: string } | null
             id: string
             title: string
           }
         | {
             __typename: 'Issue' | 'PullRequest'
+            assignees: { nodes: Array<{ login: string } | null> }
+            author: { login: string } | null
+            body: string
             id: string
+            number: number
+            state: string
             title: string
             url: string
             repository: { nameWithOwner: string }
@@ -124,9 +139,22 @@ const projectFields = `
       }
       content {
         __typename
-        ... on DraftIssue { id title }
-        ... on Issue { id title url repository { nameWithOwner } labels(first: 1) { nodes { name } } }
-        ... on PullRequest { id title url repository { nameWithOwner } labels(first: 1) { nodes { name } } }
+        ... on DraftIssue {
+          id title body creator { login }
+          assignees(first: 10) { nodes { login } }
+        }
+        ... on Issue {
+          id number title body state url author { login }
+          repository { nameWithOwner }
+          assignees(first: 10) { nodes { login } }
+          labels(first: 20) { nodes { name } }
+        }
+        ... on PullRequest {
+          id number title body state url author { login }
+          repository { nameWithOwner }
+          assignees(first: 10) { nodes { login } }
+          labels(first: 20) { nodes { name } }
+        }
       }
     }
   }
@@ -174,24 +202,28 @@ export async function fetchProject(project: ConnectedProject): Promise<GitHubPro
     const content = item.content
     const statusValue = item.fieldValues.nodes.find((value) => value?.field?.id === status?.id)
     const column = columns.find(({ id }) => id === statusValue?.optionId) ?? noStatus
-    const repository =
-      content && '__typename' in content && content.__typename !== 'DraftIssue'
-        ? content.repository.nameWithOwner
-        : 'Draft'
-    const label =
-      content && '__typename' in content && content.__typename !== 'DraftIssue'
-        ? content.labels.nodes[0]?.name
-        : undefined
+    const linkedContent = content && content.__typename !== 'DraftIssue' ? content : null
+    const repository = linkedContent?.repository.nameWithOwner ?? null
+    const labels = linkedContent?.labels.nodes.flatMap((label) => (label ? [label.name] : [])) ?? []
     column.cards.push({
       id: item.id,
+      assignees:
+        content?.assignees.nodes.flatMap((assignee) => (assignee ? [assignee.login] : [])) ?? [],
+      author: content
+        ? content.__typename === 'DraftIssue'
+          ? (content.creator?.login ?? null)
+          : (content.author?.login ?? null)
+        : null,
+      body: content?.body ?? '',
       contentId: content?.id ?? null,
       contentType: content?.__typename ?? 'Redacted',
+      labels,
+      number: linkedContent?.number ?? null,
+      repository,
+      state: linkedContent?.state ?? null,
       title: content?.title ?? 'Redacted item',
-      subtitle: label ? `${repository} · ${label}` : repository,
-      url:
-        content && '__typename' in content && content.__typename !== 'DraftIssue'
-          ? content.url
-          : null,
+      subtitle: labels[0] ? `${repository} · ${labels[0]}` : (repository ?? 'Draft'),
+      url: linkedContent?.url ?? null,
     })
   }
   if (noStatus.cards.length || columns.length === 0) columns.unshift(noStatus)

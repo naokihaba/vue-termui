@@ -3,12 +3,14 @@ import {
   Box,
   computed,
   Input,
+  Markdown,
   nextTick,
   onKeyDown,
   onMounted,
   ref,
   ScrollBox,
   shallowRef,
+  SyntaxStyle,
   Text,
   useExit,
   useRenderer,
@@ -64,6 +66,7 @@ const error = ref('')
 const activeColumn = ref(0)
 const selections = ref<number[]>([])
 const modal = ref<'add' | 'edit' | null>(null)
+const detailCard = ref<ProjectCard | null>(null)
 const draft = ref('')
 const draggedCard = ref<DraggedCard | null>(null)
 const dragActive = ref(false)
@@ -77,6 +80,23 @@ const columnScrollers = new Map<number, ScrollBoxElement>()
 const exit = useExit()
 const renderer = useRenderer()
 const { width, height } = useTerminalSize()
+const markdownStyle = SyntaxStyle.fromStyles({
+  default: { fg: '#e6edf3' },
+  'markup.heading': { fg: '#58a6ff', bold: true },
+  'markup.bold': { fg: '#f0f6fc', bold: true },
+  'markup.strong': { fg: '#f0f6fc', bold: true },
+  'markup.italic': { fg: '#f0f6fc', italic: true },
+  'markup.list': { fg: '#ff7b72' },
+  'markup.quote': { fg: '#8b949e', italic: true },
+  'markup.raw': { fg: '#a5d6ff', bg: '#161b22' },
+  'markup.link': { fg: '#58a6ff', underline: true },
+  keyword: { fg: '#ff7b72', bold: true },
+  string: { fg: '#a5d6ff' },
+  comment: { fg: '#8b949e', italic: true },
+  number: { fg: '#79c0ff' },
+  function: { fg: '#d2a8ff' },
+  type: { fg: '#ffa657' },
+})
 
 const columns = computed(() => project.value?.columns ?? [])
 const cardCount = computed(() =>
@@ -98,6 +118,24 @@ const dragGhostLeft = computed(() =>
 const dragGhostTop = computed(() =>
   Math.max(0, Math.min(dragY.value - 2, height.value - CARD_HEIGHT)),
 )
+const detailMetadata = computed(() => {
+  const card = detailCard.value
+  if (!card) return ''
+  const type = card.contentType === 'PullRequest' ? 'Pull request' : card.contentType
+  const location = card.repository && card.number ? `${card.repository}#${card.number}` : type
+  return [location, card.state, card.author ? `@${card.author}` : null].filter(Boolean).join(' · ')
+})
+const detailPeople = computed(() => {
+  const card = detailCard.value
+  if (!card) return ''
+  const parts: string[] = []
+  if (card.assignees.length) {
+    parts.push(`Assignees: ${card.assignees.map((name) => `@${name}`).join(', ')}`)
+  }
+  if (card.labels.length) parts.push(`Labels: ${card.labels.join(', ')}`)
+  return parts.join(' · ')
+})
+const detailBody = computed(() => detailCard.value?.body.trim() || '_No description provided._')
 
 function scrollBoxElement(instance: unknown): ScrollBoxElement | null {
   if (!instance || typeof instance !== 'object') return null
@@ -237,6 +275,10 @@ function openEdit(): void {
   modal.value = 'edit'
 }
 
+function openDetails(card = currentCard()): void {
+  if (card) detailCard.value = card
+}
+
 async function save(): Promise<void> {
   const board = project.value
   const title = draft.value.trim()
@@ -268,6 +310,15 @@ function selectCard(columnIndex: number, cardIndex: number): void {
   activeColumn.value = columnIndex
   selections.value[columnIndex] = cardIndex
   void revealSelection()
+}
+
+function clickCard(columnIndex: number, cardIndex: number, event: MouseEvent): void {
+  const wasDragging = dragActive.value
+  finishDrag()
+  if (wasDragging) return
+  selectCard(columnIndex, cardIndex)
+  openDetails(columns.value[columnIndex]?.cards[cardIndex])
+  event.stopPropagation()
 }
 
 function startDrag(columnIndex: number, cardIndex: number, event: MouseEvent): void {
@@ -338,6 +389,12 @@ function finishDrag(): void {
 }
 
 onKeyDown((key) => {
+  if (detailCard.value) {
+    if (key.name === 'escape' || key.name === 'q' || key.name === 'return') {
+      detailCard.value = null
+    }
+    return
+  }
   if (modal.value) {
     if (key.name === 'escape') modal.value = null
     return
@@ -350,7 +407,8 @@ onKeyDown((key) => {
   else if (key.name === 'right' || key.name === 'l') moveColumn(1)
   else if (key.name === 'up' || key.name === 'k') moveCard(-1)
   else if (key.name === 'down' || key.name === 'j') moveCard(1)
-  else if (key.name === 'm' || key.name === 'return') void advanceCard()
+  else if (key.name === 'return') openDetails()
+  else if (key.name === 'm') void advanceCard()
   else if (key.name === 'a') openAdd()
   else if (key.name === 'e') openEdit()
   else if (key.name === 'd') void remove()
@@ -444,7 +502,7 @@ onMounted(() => void load())
               :marginBottom="1"
               overflow="hidden"
               @mouse-down="(event) => startDrag(columnIndex, cardIndex, event)"
-              @mouse-up="finishDrag"
+              @mouse-up="(event) => clickCard(columnIndex, cardIndex, event)"
               @mouse-drag-end="finishDrag"
               @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
               @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
@@ -491,7 +549,7 @@ onMounted(() => void load())
       :flexShrink="0"
     >
       <Text fg="#d6dde5"
-        >drag/scroll · arrows/hjkl · m move · a add · e edit · d remove · r refresh</Text
+        >enter/click details · drag/scroll · arrows/hjkl · m move · a add · e edit</Text
       >
       <Text fg="#7f8a96">b projects · q quit</Text>
     </Box>
@@ -515,6 +573,47 @@ onMounted(() => void load())
     >
       <Text bold fg="#e7edf3" :selectable="false">{{ draggedCardData.title }}</Text>
       <Text fg="#7f8a96" :selectable="false">{{ draggedCardData.subtitle }}</Text>
+    </Box>
+
+    <Box
+      v-if="detailCard"
+      position="absolute"
+      top="8%"
+      left="8%"
+      width="84%"
+      height="84%"
+      :zIndex="250"
+      flexDirection="column"
+      :border="true"
+      borderStyle="double"
+      borderColor="#58a6ff"
+      backgroundColor="#0d1117"
+      :padding="1"
+      title=" Ticket details "
+    >
+      <Text bold fg="#f0f6fc">{{ detailCard.title }}</Text>
+      <Text fg="#8b949e">{{ detailMetadata }}</Text>
+      <Text v-if="detailPeople" fg="#7ee787">{{ detailPeople }}</Text>
+      <Text v-if="detailCard.url" fg="#58a6ff">{{ detailCard.url }}</Text>
+      <Box :border="['bottom']" borderColor="#30363d" :flexShrink="0" />
+      <ScrollBox
+        :flexGrow="1"
+        :flexShrink="1"
+        :scrollX="false"
+        :scrollY="true"
+        autofocus
+        :paddingRight="1"
+      >
+        <Markdown
+          width="100%"
+          :content="detailBody"
+          :syntax-style="markdownStyle"
+          fg="#e6edf3"
+          bg="#0d1117"
+          conceal
+        />
+      </ScrollBox>
+      <Text fg="#8b949e">↑↓/jk/page scroll · esc/enter close</Text>
     </Box>
 
     <Box

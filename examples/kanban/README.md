@@ -28,12 +28,15 @@ pnpm --filter @vue-termui/example-kanban dev
 
 Press `a` on the project page and paste a URL such as
 `https://github.com/orgs/vuejs/projects/1`. Both organization (`/orgs/`) and
-user (`/users/`) project URLs are supported.
+user (`/users/`) project URLs are supported. Columns scroll vertically, and
+boards wider than the terminal scroll horizontally; moving the selection keeps
+the active card in view.
 
 Drag cards with the mouse to reorder or change their Status. Move around with
-arrows or `hjkl`, press `m` to move an item to the next status, `a` to add a
-draft item, `e` to edit its GitHub title, `d` to remove it from the project,
-`r` to refresh, and `b` to return to the connected-project list. Removing an
-item does not delete its linked issue or pull request.
+arrows or `hjkl`, and press Enter or click a card to open its full Markdown
+description and metadata. Press `m` to move an item to the next status, `a` to
+add a draft item, `e` to edit its GitHub title, `d` to remove it from the
+project, `r` to refresh, and `b` to return to the connected-project list.
+Removing an item does not delete its linked issue or pull request.
 
 GitHub's GraphQL API returns the first 100 project items in this example.
