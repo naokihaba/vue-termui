@@ -134,30 +134,24 @@ const dragGhostLeft = computed(() =>
 const dragGhostTop = computed(() =>
   Math.max(0, Math.min(dragY.value - 2, height.value - CARD_HEIGHT)),
 )
-const detailMarkdown = computed(() => {
+const detailMetadata = computed(() => {
   const card = detailCard.value
   if (!card) return ''
-
   const type = card.contentType === 'PullRequest' ? 'Pull request' : card.contentType
   const location = card.repository && card.number ? `${card.repository}#${card.number}` : type
-  const metadata = [location, card.state, card.author ? `@${card.author}` : null]
-    .filter(Boolean)
-    .join(' · ')
-  const fields: string[] = []
-  if (card.assignees.length) {
-    fields.push(`**Assignees:** ${card.assignees.map((name) => `@${name}`).join(', ')}`)
-  }
-  if (card.labels.length) fields.push(`**Labels:** ${card.labels.join(', ')}`)
-  if (card.url) fields.push(`[Open on GitHub](${card.url})`)
-
-  return [
-    `# ${card.title.replaceAll('\n', ' ')}`,
-    `> ${metadata}`,
-    ...fields,
-    '---',
-    card.body.trim() || '_No description provided._',
-  ].join('\n\n')
+  return [location, card.state, card.author ? `@${card.author}` : null].filter(Boolean).join(' · ')
 })
+const detailPeople = computed(() => {
+  const card = detailCard.value
+  if (!card) return ''
+  const parts: string[] = []
+  if (card.assignees.length) {
+    parts.push(`Assignees: ${card.assignees.map((name) => `@${name}`).join(', ')}`)
+  }
+  if (card.labels.length) parts.push(`Labels: ${card.labels.join(', ')}`)
+  return parts.join(' · ')
+})
+const detailBody = computed(() => detailCard.value?.body.trim() || '_No description provided._')
 
 function scrollBoxElement(instance: unknown): ScrollBoxElement | null {
   if (!instance || typeof instance !== 'object') return null
@@ -613,6 +607,11 @@ onMounted(() => void load())
       :padding="1"
       title=" Ticket details "
     >
+      <Text bold fg="#f0f6fc">{{ detailCard.title }}</Text>
+      <Text fg="#8b949e">{{ detailMetadata }}</Text>
+      <Text v-if="detailPeople" fg="#7ee787">{{ detailPeople }}</Text>
+      <Text v-if="detailCard.url" fg="#58a6ff">{{ detailCard.url }}</Text>
+      <Box :border="['bottom']" borderColor="#30363d" :flexShrink="0" />
       <ScrollBox
         :flexGrow="1"
         :flexShrink="1"
@@ -625,7 +624,7 @@ onMounted(() => void load())
           <Markdown
             width="100%"
             :flexShrink="0"
-            :content="detailMarkdown"
+            :content="detailBody"
             :syntax-style="markdownStyle"
             :tableOptions="{
               style: 'grid',
