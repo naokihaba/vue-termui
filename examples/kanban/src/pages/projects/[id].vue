@@ -83,19 +83,35 @@ const { width, height } = useTerminalSize()
 const markdownStyle = SyntaxStyle.fromStyles({
   default: { fg: '#e6edf3' },
   'markup.heading': { fg: '#58a6ff', bold: true },
+  'markup.heading.1': { fg: '#58a6ff', bold: true },
+  'markup.heading.2': { fg: '#79c0ff', bold: true },
+  'markup.heading.3': { fg: '#d2a8ff', bold: true },
   'markup.bold': { fg: '#f0f6fc', bold: true },
   'markup.strong': { fg: '#f0f6fc', bold: true },
   'markup.italic': { fg: '#f0f6fc', italic: true },
   'markup.list': { fg: '#ff7b72' },
   'markup.quote': { fg: '#8b949e', italic: true },
   'markup.raw': { fg: '#a5d6ff', bg: '#161b22' },
+  'markup.raw.block': { fg: '#a5d6ff', bg: '#161b22' },
+  'markup.raw.inline': { fg: '#a5d6ff', bg: '#161b22' },
   'markup.link': { fg: '#58a6ff', underline: true },
+  'markup.link.label': { fg: '#a5d6ff', underline: true },
+  'markup.link.url': { fg: '#58a6ff', underline: true },
   keyword: { fg: '#ff7b72', bold: true },
   string: { fg: '#a5d6ff' },
   comment: { fg: '#8b949e', italic: true },
   number: { fg: '#79c0ff' },
   function: { fg: '#d2a8ff' },
   type: { fg: '#ffa657' },
+  operator: { fg: '#ff7b72' },
+  variable: { fg: '#e6edf3' },
+  property: { fg: '#79c0ff' },
+  label: { fg: '#7ee787' },
+  'punctuation.bracket': { fg: '#f0f6fc' },
+  'punctuation.delimiter': { fg: '#c9d1d9' },
+  'diff.plus': { fg: '#3fb950' },
+  'diff.minus': { fg: '#f85149' },
+  conceal: { fg: '#6e7681' },
 })
 
 const columns = computed(() => project.value?.columns ?? [])
@@ -118,24 +134,30 @@ const dragGhostLeft = computed(() =>
 const dragGhostTop = computed(() =>
   Math.max(0, Math.min(dragY.value - 2, height.value - CARD_HEIGHT)),
 )
-const detailMetadata = computed(() => {
+const detailMarkdown = computed(() => {
   const card = detailCard.value
   if (!card) return ''
+
   const type = card.contentType === 'PullRequest' ? 'Pull request' : card.contentType
   const location = card.repository && card.number ? `${card.repository}#${card.number}` : type
-  return [location, card.state, card.author ? `@${card.author}` : null].filter(Boolean).join(' · ')
-})
-const detailPeople = computed(() => {
-  const card = detailCard.value
-  if (!card) return ''
-  const parts: string[] = []
+  const metadata = [location, card.state, card.author ? `@${card.author}` : null]
+    .filter(Boolean)
+    .join(' · ')
+  const fields: string[] = []
   if (card.assignees.length) {
-    parts.push(`Assignees: ${card.assignees.map((name) => `@${name}`).join(', ')}`)
+    fields.push(`**Assignees:** ${card.assignees.map((name) => `@${name}`).join(', ')}`)
   }
-  if (card.labels.length) parts.push(`Labels: ${card.labels.join(', ')}`)
-  return parts.join(' · ')
+  if (card.labels.length) fields.push(`**Labels:** ${card.labels.join(', ')}`)
+  if (card.url) fields.push(`[Open on GitHub](${card.url})`)
+
+  return [
+    `# ${card.title.replaceAll('\n', ' ')}`,
+    `> ${metadata}`,
+    ...fields,
+    '---',
+    card.body.trim() || '_No description provided._',
+  ].join('\n\n')
 })
-const detailBody = computed(() => detailCard.value?.body.trim() || '_No description provided._')
 
 function scrollBoxElement(instance: unknown): ScrollBoxElement | null {
   if (!instance || typeof instance !== 'object') return null
@@ -591,11 +613,6 @@ onMounted(() => void load())
       :padding="1"
       title=" Ticket details "
     >
-      <Text bold fg="#f0f6fc">{{ detailCard.title }}</Text>
-      <Text fg="#8b949e">{{ detailMetadata }}</Text>
-      <Text v-if="detailPeople" fg="#7ee787">{{ detailPeople }}</Text>
-      <Text v-if="detailCard.url" fg="#58a6ff">{{ detailCard.url }}</Text>
-      <Box :border="['bottom']" borderColor="#30363d" :flexShrink="0" />
       <ScrollBox
         :flexGrow="1"
         :flexShrink="1"
@@ -604,14 +621,24 @@ onMounted(() => void load())
         autofocus
         :paddingRight="1"
       >
-        <Markdown
-          width="100%"
-          :content="detailBody"
-          :syntax-style="markdownStyle"
-          fg="#e6edf3"
-          bg="#0d1117"
-          conceal
-        />
+        <Box width="100%" flexDirection="column" :flexGrow="0" :flexShrink="0">
+          <Markdown
+            width="100%"
+            :flexShrink="0"
+            :content="detailMarkdown"
+            :syntax-style="markdownStyle"
+            :tableOptions="{
+              style: 'grid',
+              widthMode: 'full',
+              wrapMode: 'word',
+            }"
+            internalBlockMode="top-level"
+            fg="#e6edf3"
+            bg="#0d1117"
+            conceal
+            concealCode
+          />
+        </Box>
       </ScrollBox>
       <Text fg="#8b949e">↑↓/jk/page scroll · esc/enter close</Text>
     </Box>
