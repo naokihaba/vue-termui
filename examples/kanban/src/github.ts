@@ -335,6 +335,25 @@ export async function updateCardTitle(card: ProjectCard, title: string): Promise
   )
 }
 
+export async function updateCardBody(card: ProjectCard, body: string): Promise<void> {
+  if (!card.contentId || card.contentType === 'Redacted') {
+    throw new Error('This item cannot be edited')
+  }
+  const mutation =
+    card.contentType === 'DraftIssue'
+      ? 'updateProjectV2DraftIssue'
+      : card.contentType === 'Issue'
+        ? 'updateIssue'
+        : 'updatePullRequest'
+  const idField = card.contentType === 'DraftIssue' ? 'draftIssueId' : 'id'
+  await graphql(
+    `mutation UpdateBody($id: ID!, $body: String!) {
+      ${mutation}(input: { ${idField}: $id, body: $body }) { clientMutationId }
+    }`,
+    { id: card.contentId, body },
+  )
+}
+
 export async function removeCard(projectId: string, itemId: string): Promise<void> {
   await graphql(
     `

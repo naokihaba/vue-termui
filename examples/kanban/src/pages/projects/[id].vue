@@ -12,6 +12,7 @@ import {
   shallowRef,
   SyntaxStyle,
   Text,
+  Textarea,
   useExit,
   useRenderer,
   useTerminalSize,
@@ -25,6 +26,7 @@ import {
   moveCardAfter,
   removeCard,
   setCardStatus,
+  updateCardBody,
   updateCardTitle,
   type GitHubProject,
   type ProjectCard,
@@ -67,6 +69,9 @@ const activeColumn = ref(0)
 const selections = ref<number[]>([])
 const modal = ref<'add' | 'edit' | null>(null)
 const detailCard = ref<ProjectCard | null>(null)
+const editingBody = ref(false)
+const bodyDraft = ref('')
+const bodyEditSession = ref(0)
 const draft = ref('')
 const draggedCard = ref<DraggedCard | null>(null)
 const dragActive = ref(false)
@@ -187,7 +192,13 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
+    const detailCardId = detailCard.value?.id
     project.value = await fetchProject(selected)
+    if (detailCardId) {
+      detailCard.value =
+        project.value.columns.flatMap(({ cards }) => cards).find(({ id }) => id === detailCardId) ??
+        null
+    }
     selections.value = project.value.columns.map((_, index) => selections.value[index] ?? 0)
     activeColumn.value = Math.min(activeColumn.value, Math.max(project.value.columns.length - 1, 0))
     await revealSelection()
@@ -198,17 +209,19 @@ async function load(): Promise<void> {
   }
 }
 
-async function sync(action: () => Promise<void>): Promise<void> {
-  if (syncing.value) return
+async function sync(action: () => Promise<void>): Promise<boolean> {
+  if (syncing.value) return false
   syncing.value = true
   error.value = ''
   try {
     await action()
     await load()
+    return true
   } catch (cause) {
     const actionError = cause instanceof Error ? cause.message : String(cause)
     await load()
     error.value = error.value ? `${actionError}; refresh failed: ${error.value}` : actionError
+    return false
   } finally {
     syncing.value = false
   }
@@ -292,7 +305,24 @@ function openEdit(): void {
 }
 
 function openDetails(card = currentCard()): void {
-  if (card) detailCard.value = card
+  if (!card) return
+  editingBody.value = false
+  detailCard.value = card
+}
+
+function startBodyEdit(): void {
+  const card = detailCard.value
+  if (!card || card.contentType === 'Redacted') return
+  bodyDraft.value = card.body
+  bodyEditSession.value++
+  editingBody.value = true
+  error.value = ''
+}
+
+async function saveBody(body: string): Promise<void> {
+  const card = detailCard.value
+  if (!card) return
+  if (await sync(() => updateCardBody(card, body))) editingBody.value = false
 }
 
 async function save(): Promise<void> {
@@ -406,6 +436,14 @@ function finishDrag(): void {
 
 onKeyDown((key) => {
   if (detailCard.value) {
+    if (editingBody.value) {
+      if (key.name === 'escape') editingBody.value = false
+      return
+    }
+    if (key.name === 'e') {
+      startBodyEdit()
+      return
+    }
     if (key.name === 'escape' || key.name === 'q' || key.name === 'return') {
       detailCard.value = null
     }
@@ -612,7 +650,24 @@ onMounted(() => void load())
       <Text v-if="detailPeople" fg="#7ee787">{{ detailPeople }}</Text>
       <Text v-if="detailCard.url" fg="#58a6ff">{{ detailCard.url }}</Text>
       <Box :border="['bottom']" borderColor="#30363d" :flexShrink="0" />
+      <Textarea
+        v-if="editingBody"
+        :key="bodyEditSession"
+        v-model="bodyDraft"
+        width="100%"
+        :flexGrow="1"
+        :flexShrink="1"
+        autofocus
+        wrapMode="word"
+        placeholder="Write the ticket body in Markdown…"
+        backgroundColor="#0d1117"
+        focusedBackgroundColor="#161b22"
+        textColor="#e6edf3"
+        cursorColor="#58a6ff"
+        @submit="saveBody"
+      />
       <ScrollBox
+        v-else
         :flexGrow="1"
         :flexShrink="1"
         :scrollX="false"
@@ -639,7 +694,8 @@ onMounted(() => void load())
           />
         </Box>
       </ScrollBox>
-      <Text fg="#8b949e">↑↓/jk/page scroll · esc/enter close</Text>
+      <Text v-if="editingBody" fg="#8b949e">⌘/Meta+Enter save · esc cancel</Text>
+      <Text v-else fg="#8b949e">↑↓/jk/page scroll · e edit body · esc/enter close</Text>
     </Box>
 
     <Box

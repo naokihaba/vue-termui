@@ -34,9 +34,11 @@ the active card in view.
 
 Drag cards with the mouse to reorder or change their Status. Move around with
 arrows or `hjkl`, and press Enter or click a card to open its full Markdown
-description and metadata. Press `m` to move an item to the next status, `a` to
-add a draft item, `e` to edit its GitHub title, `d` to remove it from the
-project, `r` to refresh, and `b` to return to the connected-project list.
-Removing an item does not delete its linked issue or pull request.
+description and metadata. In the detail view, press `e` to edit the Markdown
+body, Meta/Cmd+Enter to save it to GitHub, or Escape to cancel. On the board,
+press `m` to move an item to the next status, `a` to add a draft item, `e` to
+edit its GitHub title, `d` to remove it from the project, `r` to refresh, and
+`b` to return to the connected-project list. Removing an item does not delete
+its linked issue or pull request.
 
 GitHub's GraphQL API returns the first 100 project items in this example.
