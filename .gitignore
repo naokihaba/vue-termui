@@ -19,3 +19,4 @@ tsconfig.vitest-temp.json
 typed-router.d.ts
 .claude
 logs/
+.pnpm-store
