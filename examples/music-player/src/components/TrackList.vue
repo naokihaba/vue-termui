@@ -51,8 +51,8 @@ defineExpose({ focus })
   <ScrollBox
     ref="list"
     :id="`${idPrefix}-list`"
-    flexDirection="column"
     :flexGrow="1"
+    :flexShrink="1"
     :border="true"
     borderStyle="rounded"
     :borderColor="focused ? '#1ed760' : '#35483b'"
