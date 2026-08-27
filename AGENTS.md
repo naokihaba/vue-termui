@@ -38,12 +38,19 @@ Always keep this file up to date when project commands, structure, or tooling ch
 
 Doc comments: say what a thing is _for_, not how it works — short and stable over exhaustive and quick to go stale. Let the code/types carry the detail.
 
+## Agent skills
+
+- `skills/vue-termui/SKILL.md` covers layout and common components directly, with focused references for specialized components, advanced behavior, recipes, and component development.
+
 ## Architecture
 
 - Root package `vue-termui` is the core library. `src/index.ts` re-exports from
   `src/*.ts`. Tests co-located as `*.spec.ts`; type tests as `*.test-d.ts`.
 - `packages/three/` is `@vue-termui/three`: three.js WebGPU scenes rendered
   into the terminal (see its section below).
+- `examples/` contains standalone workspace apps. Run the lazygit-inspired
+  example with `pnpm --filter @vue-termui/example-lazygit dev`; other examples
+  follow the same `@vue-termui/example-*` naming convention.
 - `playground/` is a workspace package depending on the core via `workspace:*`.
   It imports **only** from `vue-termui` (no direct `@opentui/core` or `vue`);
   3D pages may also import `@vue-termui/three`, `three` and `@tresjs/core`

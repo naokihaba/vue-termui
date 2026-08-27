@@ -74,6 +74,11 @@ export default defineConfig({
 })
 ```
 
+## TODO
+
+- [ ] Add focus management guidance to the `vue-termui` skill.
+- [ ] Add keyboard handling guidance to the `vue-termui` skill.
+
 ## License
 
 [MIT](./LICENSE)
