@@ -2,28 +2,25 @@
 import {
   Box,
   computed,
-  Image,
-  Input,
-  type MouseEvent,
   nextTick,
   onKeyDown,
   onMounted,
-  ProgressBar,
+  provide,
   ref,
-  ScrollBox,
   Text,
   useCurrentFocusedElement,
   useExit,
+  useFocusManager,
   useInterval,
   useTemplateRef,
   useTerminalSize,
   useTitle,
-  watch,
 } from 'vue-termui'
+import { RouterView, useRouter } from 'vue-router'
+import Navigation from './components/Navigation.vue'
 import { logError, logPath } from './logging'
+import { playerKey, type PlayerContext, type VisibleError } from './player'
 import { SpotifyApiError, SpotifyClient, type PlayerState, type Track } from './spotify'
-
-type View = 'main' | 'search' | 'favorites'
 
 const demoTracks: Track[] = [
   {
@@ -60,12 +57,6 @@ const demoTracks: Track[] = [
   },
 ]
 
-interface VisibleError {
-  title: string
-  detail: string
-  hint: string
-}
-
 const client = SpotifyClient.create()
 const demoIndex = ref(0)
 const state = ref<PlayerState>({
@@ -77,41 +68,26 @@ const state = ref<PlayerState>({
   device: client ? 'Connecting…' : 'Demo device',
   volume: 72,
 })
-const view = ref<View>('main')
 const queue = ref<Track[]>(client ? [] : demoTracks.slice(1))
 const favorites = ref<Track[]>(client ? [] : demoTracks)
 const searchResults = ref<Track[]>([])
 const searchQuery = ref('')
-const selectedIndex = ref(0)
 const error = ref<VisibleError | null>(null)
 const busy = ref(false)
 const controlBusy = ref(false)
 const contentBusy = ref(false)
 const exit = useExit()
-const { width, height } = useTerminalSize()
-const progressTrack = useTemplateRef('progressTrack')
-const searchInput = useTemplateRef('searchInput')
-const trackList = useTemplateRef('trackList')
+const router = useRouter()
 const focusedElement = useCurrentFocusedElement()
+const navigation = useTemplateRef('navigation')
+const { focusNext, focusPrevious } = useFocusManager()
+const { width, height } = useTerminalSize()
 const compact = computed(() => width.value < 88)
 const short = computed(() => height.value < 30)
 const progressWidth = computed(() =>
-  Math.max(16, Math.min(52, width.value - (compact.value ? 12 : 42))),
+  Math.max(12, Math.min(52, width.value - (compact.value ? 34 : 50))),
 )
-const visibleTracks = computed(() =>
-  view.value === 'favorites'
-    ? favorites.value
-    : view.value === 'search'
-      ? searchResults.value
-      : queue.value,
-)
-const contentTitle = computed(() =>
-  view.value === 'favorites'
-    ? ` Liked songs · ${favorites.value.length} `
-    : view.value === 'search'
-      ? ` Search results · ${searchResults.value.length} `
-      : ` Up next · ${queue.value.length} `,
-)
+
 useTitle('Spoterm')
 
 function reportError(action: string, cause: unknown): void {
@@ -121,10 +97,7 @@ function reportError(action: string, cause: unknown): void {
   if (cause instanceof SpotifyApiError) {
     if (cause.status === 401) hint = 'Authorization expired. Run the auth command again.'
     else if (cause.status === 403) {
-      hint =
-        view.value === 'favorites'
-          ? 'Favorites need user-library-read. Delete .spotify-token.json and run auth again.'
-          : 'Spotify requires Premium, playback permission, and a playable active device.'
+      hint = 'Spotify requires the requested permission, Premium playback, and a playable device.'
     } else if (cause.status === 404) hint = 'Open Spotify on a device, start a track, then retry.'
     else if (cause.status === 429) hint = 'Spotify rate-limited the app. Wait a moment and retry.'
   }
@@ -155,16 +128,13 @@ async function refreshQueue(showError = true): Promise<void> {
   if (!client) return
   try {
     queue.value = await client.queue()
-    if (view.value === 'main') {
-      selectedIndex.value = Math.min(selectedIndex.value, Math.max(0, queue.value.length - 1))
-    }
   } catch (cause) {
     if (showError) reportError('Load queue', cause)
   }
 }
 
 async function loadFavorites(): Promise<void> {
-  if (!client || contentBusy.value) return
+  if (!client || contentBusy.value || favorites.value.length > 0) return
   contentBusy.value = true
   try {
     favorites.value = await client.favorites()
@@ -182,7 +152,6 @@ async function runSearch(): Promise<void> {
   contentBusy.value = true
   try {
     searchResults.value = await client.search(query)
-    selectedIndex.value = 0
     error.value = null
   } catch (cause) {
     reportError('Search', cause)
@@ -239,19 +208,9 @@ function playTrack(track: Track): void {
   )
 }
 
-function formatTime(ms: number): string {
-  const seconds = Math.floor(ms / 1000)
+function formatTime(milliseconds: number): string {
+  const seconds = Math.floor(milliseconds / 1000)
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-}
-
-async function showView(next: View): Promise<void> {
-  view.value = next
-  selectedIndex.value = 0
-  if (next === 'favorites' && client && favorites.value.length === 0) void loadFavorites()
-  if (next === 'search') {
-    await nextTick()
-    searchInput.value?.$el.focus()
-  }
 }
 
 function toggle(): void {
@@ -302,12 +261,7 @@ function cycleRepeat(): void {
   )
 }
 
-function seek(event: MouseEvent): void {
-  const element = progressTrack.value?.$el
-  const track = state.value.track
-  if (!element || !track || element.width <= 0) return
-  const ratio = Math.max(0, Math.min(1, (event.x - element.screenX) / element.width))
-  const progress = Math.round(track.duration * ratio)
+function seekTo(progress: number): void {
   void control(
     'Seek',
     () => client!.seek(progress),
@@ -316,6 +270,29 @@ function seek(event: MouseEvent): void {
     },
   )
 }
+
+function navigate(path: '/' | '/search' | '/favorites'): void {
+  void router.push(path)
+}
+
+provide<PlayerContext>(playerKey, {
+  connected: !!client,
+  state,
+  queue,
+  favorites,
+  searchResults,
+  searchQuery,
+  error,
+  contentBusy,
+  compact,
+  short,
+  progressWidth,
+  formatTime,
+  loadFavorites,
+  playTrack,
+  runSearch,
+  seekTo,
+})
 
 onMounted(() => {
   void refresh()
@@ -327,26 +304,37 @@ useInterval(() => {
   } else void refresh(false)
 }, 1000)
 useInterval(() => void refreshQueue(false), 15_000)
-watch(selectedIndex, async (index) => {
-  await nextTick()
-  trackList.value?.$el.scrollChildIntoView(`track-${view.value}-${index}`)
-})
 
 onKeyDown((key) => {
-  const typing = focusedElement.value === searchInput.value?.$el
-  if (typing) {
-    if (key.name === 'escape') void showView('main')
+  if (key.name === 'tab') {
+    key.preventDefault()
+    if (key.shift) focusPrevious()
+    else focusNext()
     return
   }
+
+  const typing = focusedElement.value?.id === 'search-input'
+  if (key.name === 'escape') {
+    key.preventDefault()
+    if (router.currentRoute.value.path !== '/') {
+      void router.push('/').then(async () => {
+        await nextTick()
+        navigation.value?.focusActive()
+      })
+    } else navigation.value?.focusActive()
+    return
+  }
+  if (typing) return
+
   if (key.name === 'q') exit()
-  else if (key.name === '1') void showView('main')
-  else if (key.name === '2' || key.name === '/') void showView('search')
-  else if (key.name === '3') void showView('favorites')
+  else if (key.name === '1') navigate('/')
+  else if (key.name === '2' || key.name === '/') navigate('/search')
+  else if (key.name === '3') navigate('/favorites')
   else if (key.name === 'space') toggle()
-  else if (key.name === 'right' || key.name === 'n') skip(1)
-  else if (key.name === 'left' || key.name === 'b') skip(-1)
-  else if (key.name === 'up' || key.name === '+') adjustVolume(5)
-  else if (key.name === 'down' || key.name === '-') adjustVolume(-5)
+  else if (key.name === 'n' || key.name === ']') skip(1)
+  else if (key.name === 'b' || key.name === '[') skip(-1)
+  else if (key.name === '+' || key.name === '=') adjustVolume(5)
+  else if (key.name === '-') adjustVolume(-5)
   else if (key.name === 's') {
     const shuffle = !state.value.shuffle
     void control(
@@ -357,16 +345,6 @@ onKeyDown((key) => {
       },
     )
   } else if (key.name === 'r') cycleRepeat()
-  else if (key.name === 'j') {
-    selectedIndex.value = Math.max(
-      0,
-      Math.min(visibleTracks.value.length - 1, selectedIndex.value + 1),
-    )
-  } else if (key.name === 'k') selectedIndex.value = Math.max(0, selectedIndex.value - 1)
-  else if (key.name === 'return') {
-    const track = visibleTracks.value[selectedIndex.value]
-    if (track) playTrack(track)
-  }
 })
 </script>
 
@@ -393,149 +371,9 @@ onKeyDown((key) => {
       :gap="1"
       overflow="hidden"
     >
-      <Box
-        :flexDirection="compact ? 'row' : 'column'"
-        :width="compact ? '100%' : 20"
-        :height="compact ? 3 : '100%'"
-        backgroundColor="#111914"
-        :border="true"
-        borderStyle="rounded"
-        borderColor="#2a3a30"
-        :paddingX="1"
-        :gap="compact ? 2 : 1"
-      >
-        <Text v-if="!compact" bold fg="#718077">BROWSE</Text>
-        <Box
-          :backgroundColor="view === 'main' ? '#23402e' : '#111914'"
-          :paddingX="1"
-          @mouseDown.left="showView('main')"
-          ><Text :bold="view === 'main'" :fg="view === 'main' ? '#1ed760' : '#c4d0c8'"
-            >⌂ Main [1]</Text
-          ></Box
-        >
-        <Box
-          :backgroundColor="view === 'search' ? '#23402e' : '#111914'"
-          :paddingX="1"
-          @mouseDown.left="showView('search')"
-          ><Text :bold="view === 'search'" :fg="view === 'search' ? '#1ed760' : '#c4d0c8'"
-            >⌕ Search [2]</Text
-          ></Box
-        >
-        <Box
-          :backgroundColor="view === 'favorites' ? '#23402e' : '#111914'"
-          :paddingX="1"
-          @mouseDown.left="showView('favorites')"
-          ><Text :bold="view === 'favorites'" :fg="view === 'favorites' ? '#1ed760' : '#c4d0c8'"
-            >♥ Favorites [3]</Text
-          ></Box
-        >
-        <Box v-if="!compact" :flexGrow="1" />
-        <Text v-if="!compact" dim fg="#718077">j/k select · enter play</Text>
-      </Box>
-
+      <Navigation ref="navigation" :compact="compact" />
       <Box flexDirection="column" :flexGrow="1" :gap="1" overflow="hidden">
-        <Box
-          v-if="view === 'main'"
-          :flexDirection="compact ? 'column' : 'row'"
-          :height="short ? 9 : compact ? 15 : 13"
-          :border="true"
-          borderStyle="rounded"
-          borderColor="#1ed760"
-          title=" Now playing "
-          :padding="1"
-          :gap="short ? 0 : 2"
-        >
-          <Box
-            v-if="state.track?.image && !compact && !short"
-            :width="22"
-            height="100%"
-            :flexShrink="0"
-            ><Image :source="state.track.image" width="100%" height="100%" fit="cover"
-          /></Box>
-          <Box flexDirection="column" :flexGrow="1" :gap="short ? 0 : 1">
-            <Text bold fg="#ffffff">{{ state.track?.name ?? 'Nothing playing' }}</Text>
-            <Text fg="#b7c7bc">{{ state.track?.artist ?? 'Open Spotify on a device' }}</Text>
-            <Text v-if="!short" fg="#718077">{{ state.track?.album ?? '' }}</Text>
-            <Box
-              ref="progressTrack"
-              :width="progressWidth"
-              @mouseDown.left="seek"
-              @mouseDrag="seek"
-            >
-              <ProgressBar
-                :value="state.progress"
-                :max="state.track?.duration ?? 1"
-                :width="progressWidth"
-                color="#1ed760"
-                trackColor="#27362d"
-              />
-            </Box>
-            <Text fg="#84978a"
-              >{{ formatTime(state.progress) }} / {{ formatTime(state.track?.duration ?? 0) }} ·
-              click to seek</Text
-            >
-            <Box flexDirection="row" :gap="2">
-              <Text bold fg="#ffffff">{{ state.playing ? '❚❚ PLAYING' : '▶ PAUSED' }}</Text>
-              <Text :fg="state.shuffle ? '#1ed760' : '#59675e'"
-                >SHUFFLE {{ state.shuffle ? 'ON' : 'OFF' }}</Text
-              >
-              <Text fg="#8ca095">REPEAT {{ state.repeat.toUpperCase() }}</Text>
-              <Text fg="#b7c7bc">VOL {{ state.volume }}%</Text>
-            </Box>
-          </Box>
-        </Box>
-
-        <Box v-if="view === 'search'" flexDirection="column" :gap="1">
-          <Text bold fg="#ffffff">Find your next track</Text>
-          <Input
-            ref="searchInput"
-            v-model="searchQuery"
-            width="100%"
-            placeholder="Search artists, songs, albums…"
-            @enter="runSearch"
-          />
-          <Text dim fg="#718077">Press Enter to search · Escape returns home</Text>
-        </Box>
-
-        <ScrollBox
-          ref="trackList"
-          flexDirection="column"
-          :flexGrow="1"
-          :border="true"
-          borderStyle="rounded"
-          borderColor="#35483b"
-          :title="contentTitle"
-          :paddingX="1"
-          :scrollX="false"
-          :scrollY="true"
-          overflow="hidden"
-        >
-          <Text v-if="contentBusy" fg="#1ed760">Loading…</Text>
-          <Text v-else-if="visibleTracks.length === 0" fg="#718077">No tracks here yet.</Text>
-          <Box
-            v-for="(track, index) in visibleTracks"
-            v-else
-            :key="`${view}-${track.id}-${index}`"
-            :id="`track-${view}-${index}`"
-            flexDirection="row"
-            justifyContent="space-between"
-            :backgroundColor="index === selectedIndex ? '#203329' : '#090d0b'"
-            :paddingX="1"
-            :marginBottom="index === selectedIndex ? 1 : 0"
-            @mouseDown.left="((selectedIndex = index), playTrack(track))"
-          >
-            <Text
-              :bold="index === selectedIndex"
-              :fg="index === selectedIndex ? '#1ed760' : '#e2e8e4'"
-              >{{ index === selectedIndex ? '▶' : `${index + 1}.` }} {{ track.name }} ·
-              {{ track.artist }}</Text
-            >
-            <Text v-if="!compact" fg="#718077"
-              >{{ track.album }} · {{ formatTime(track.duration) }}</Text
-            >
-          </Box>
-        </ScrollBox>
-
+        <RouterView />
         <Box
           v-if="error"
           flexDirection="column"
@@ -561,8 +399,10 @@ onKeyDown((key) => {
       :height="1"
       :flexShrink="0"
     >
-      <Text fg="#d9e5dc">space play · ←/→ track · ↑/↓ volume · s shuffle · r repeat</Text>
-      <Text fg="#718077">q quit</Text>
+      <Text fg="#d9e5dc"
+        >tab focus · space play · b/n track · +/- volume · s shuffle · r repeat</Text
+      >
+      <Text fg="#718077">esc home · q quit</Text>
     </Box>
   </Box>
 </template>

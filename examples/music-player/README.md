@@ -36,7 +36,16 @@ or the active device cannot play the current item. The response detail in the
 error panel and log identifies the reason Spotify returned. If permissions have
 changed, delete `.spotify-token.json` and run `auth` again.
 
-Use `1`/`2`/`3` or click the sidebar to open Main, Search, and Favorites. The
-queue comes from the active Spotify session. Select tracks with `j`/`k` and
-Enter or click one to play it. Click or drag on the progress bar to seek. The
-layout switches to compact top navigation on narrow terminals.
+Main, Search, and Favorites are routed views. Use `1`/`2`/`3`, focus the
+navigation with Tab and press Enter, click it, or start a built route directly:
+
+```bash
+pnpm --filter @vue-termui/example-music-player play -- /favorites
+```
+
+The queue comes from the active Spotify session. Within a track list, use
+arrows or `j`/`k`, then Enter to play; Home/End jump to the list edges. Tab and
+Shift+Tab cycle controls, Escape returns home, and `/` opens Search. Global
+playback keys are shown in the footer and stay inactive while typing. Click or
+drag on the progress bar to seek. The layout switches to compact top navigation
+on narrow terminals.
