@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import {
   Box,
+  computed,
   Input,
   onKeyDown,
   ref,
   Text,
   useExit,
+  useRenderer,
   useTerminalSize,
   useTitle,
   type MouseEvent,
@@ -27,6 +29,21 @@ interface Column {
 interface DraggedCard {
   cardId: number
   sourceColumn: number
+}
+
+const CARD_HEIGHT = 5
+const STRIPED_BORDER = {
+  topLeft: '╭',
+  topRight: '╮',
+  bottomLeft: '╰',
+  bottomRight: '╯',
+  horizontal: '┄',
+  vertical: '┆',
+  topT: '┬',
+  bottomT: '┴',
+  leftT: '├',
+  rightT: '┤',
+  cross: '┼',
 }
 
 const columns = ref<Column[]>([
@@ -68,11 +85,33 @@ const modal = ref<'add' | 'edit' | null>(null)
 const draft = ref('')
 const nextId = ref(9)
 const draggedCard = ref<DraggedCard | null>(null)
+const dragActive = ref(false)
+const dragX = ref(0)
+const dragY = ref(0)
+const dragCardWidth = ref(16)
 const dropColumn = ref<number | null>(null)
 const dropIndex = ref<number | null>(null)
 const exit = useExit()
-const { width } = useTerminalSize()
+const renderer = useRenderer()
+const { width, height } = useTerminalSize()
 useTitle('VueBoard')
+
+const draggedCardData = computed(() => {
+  const dragged = draggedCard.value
+  if (!dragged) return undefined
+  return columns.value[dragged.sourceColumn]?.cards.find((card) => card.id === dragged.cardId)
+})
+
+// Keep the pointer just outside the floating card so the ghost never masks the
+// real drop target in OpenTUI's hit grid.
+const dragGhostLeft = computed(() =>
+  dragX.value + dragCardWidth.value + 1 < width.value
+    ? dragX.value + 1
+    : Math.max(0, dragX.value - dragCardWidth.value - 1),
+)
+const dragGhostTop = computed(() =>
+  Math.max(0, Math.min(dragY.value - 2, height.value - CARD_HEIGHT)),
+)
 
 function currentCard(): Card | undefined {
   return columns.value[activeColumn.value]?.cards[selections.value[activeColumn.value] ?? 0]
@@ -153,20 +192,33 @@ function startDrag(columnIndex: number, cardIndex: number, event: MouseEvent): v
 
   selectCard(columnIndex, cardIndex)
   draggedCard.value = { cardId: card.id, sourceColumn: columnIndex }
+  dragActive.value = false
+  dragX.value = event.x
+  dragY.value = event.y
+  const cardElement = renderer.root.findDescendantById(`kanban-card-${card.id}`)
+  dragCardWidth.value = cardElement?.width ?? 16
   dropColumn.value = columnIndex
   dropIndex.value = cardIndex
   event.stopPropagation()
 }
 
-function dragOverColumn(columnIndex: number, event: MouseEvent): void {
+function moveDrag(event: MouseEvent): void {
   if (!draggedCard.value) return
+  dragActive.value = true
+  dragX.value = event.x
+  dragY.value = event.y
+  event.stopPropagation()
+}
+
+function dragOverColumn(columnIndex: number, event: MouseEvent): void {
+  if (!dragActive.value) return
   dropColumn.value = columnIndex
   dropIndex.value = columns.value[columnIndex]?.cards.length ?? 0
   event.stopPropagation()
 }
 
 function dragOverCard(columnIndex: number, cardIndex: number, event: MouseEvent): void {
-  if (!draggedCard.value) return
+  if (!dragActive.value) return
   dropColumn.value = columnIndex
   dropIndex.value = cardIndex
   event.stopPropagation()
@@ -174,7 +226,7 @@ function dragOverCard(columnIndex: number, cardIndex: number, event: MouseEvent)
 
 function dropCard(columnIndex: number, targetIndex: number, event: MouseEvent): void {
   const dragged = draggedCard.value
-  if (!dragged) return
+  if (!dragged || !dragActive.value) return
 
   const source = columns.value[dragged.sourceColumn]
   const destination = columns.value[columnIndex]
@@ -200,6 +252,7 @@ function dropCard(columnIndex: number, targetIndex: number, event: MouseEvent): 
   activeColumn.value = columnIndex
   selections.value[columnIndex] = insertionIndex
   draggedCard.value = null
+  dragActive.value = false
   dropColumn.value = null
   dropIndex.value = null
   event.stopPropagation()
@@ -210,6 +263,7 @@ function finishDrag(): void {
   // drop target has had a chance to move the card.
   queueMicrotask(() => {
     draggedCard.value = null
+    dragActive.value = false
     dropColumn.value = null
     dropIndex.value = null
   })
@@ -261,53 +315,80 @@ onKeyDown((key) => {
         :titleColor="column.color"
         :paddingX="1"
         overflow="hidden"
+        @mouse-drag="moveDrag"
         @mouse-over="(event) => dragOverColumn(columnIndex, event)"
         @mouse-drop="(event) => dropCard(columnIndex, column.cards.length, event)"
       >
-        <Box
-          v-for="(card, cardIndex) in column.cards"
-          :key="card.id"
-          flexDirection="column"
-          :height="5"
-          :flexShrink="0"
-          :border="true"
-          borderStyle="rounded"
-          :borderColor="
-            draggedCard?.cardId === card.id
-              ? '#ffffff'
-              : dropColumn === columnIndex && dropIndex === cardIndex
-                ? '#ffffff'
-                : activeColumn === columnIndex && selections[columnIndex] === cardIndex
-                  ? column.color
-                  : '#46505a'
-          "
-          :backgroundColor="
-            draggedCard?.cardId === card.id
-              ? '#33414d'
-              : activeColumn === columnIndex && selections[columnIndex] === cardIndex
+        <Box v-for="(card, cardIndex) in column.cards" :key="card.id" flexDirection="column">
+          <Box
+            :visible="dragActive && dropColumn === columnIndex && dropIndex === cardIndex"
+            :height="CARD_HEIGHT"
+            :flexShrink="0"
+            :border="true"
+            :customBorderChars="STRIPED_BORDER"
+            borderColor="#8b949e"
+            :shouldFill="false"
+            :marginBottom="1"
+            @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
+            @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
+          />
+          <Box
+            :id="`kanban-card-${card.id}`"
+            flexDirection="column"
+            :height="CARD_HEIGHT"
+            :flexShrink="0"
+            :border="true"
+            borderStyle="rounded"
+            :borderColor="
+              activeColumn === columnIndex && selections[columnIndex] === cardIndex
+                ? column.color
+                : '#46505a'
+            "
+            :backgroundColor="
+              activeColumn === columnIndex && selections[columnIndex] === cardIndex
                 ? '#26323b'
                 : '#171c22'
-          "
-          :paddingX="1"
-          :marginBottom="1"
-          overflow="hidden"
-          @mouse-down="(event) => startDrag(columnIndex, cardIndex, event)"
-          @mouse-up="finishDrag"
-          @mouse-drag-end="finishDrag"
-          @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
-          @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
-        >
-          <Text
-            :bold="activeColumn === columnIndex && selections[columnIndex] === cardIndex"
-            fg="#e7edf3"
-            :selectable="false"
-            >{{ card.title }}</Text
+            "
+            :opacity="dragActive && draggedCard?.cardId === card.id ? 0.35 : 1"
+            :paddingX="1"
+            :marginBottom="1"
+            overflow="hidden"
+            @mouse-down="(event) => startDrag(columnIndex, cardIndex, event)"
+            @mouse-up="finishDrag"
+            @mouse-drag-end="finishDrag"
+            @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
+            @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
           >
-          <Text :fg="priorityColor(card.priority)" :selectable="false"
-            >{{ card.priority.toUpperCase() }} · {{ card.tag }}</Text
-          >
+            <Text
+              :bold="activeColumn === columnIndex && selections[columnIndex] === cardIndex"
+              fg="#e7edf3"
+              :selectable="false"
+              >{{ card.title }}</Text
+            >
+            <Text :fg="priorityColor(card.priority)" :selectable="false"
+              >{{ card.priority.toUpperCase() }} · {{ card.tag }}</Text
+            >
+          </Box>
         </Box>
-        <Text v-if="!column.cards.length" fg="#7f8a96">No cards</Text>
+        <Box
+          v-if="dragActive && dropColumn === columnIndex && dropIndex === column.cards.length"
+          :height="CARD_HEIGHT"
+          :flexShrink="0"
+          :border="true"
+          :customBorderChars="STRIPED_BORDER"
+          borderColor="#8b949e"
+          :shouldFill="false"
+          :marginBottom="1"
+          @mouse-over="(event) => dragOverColumn(columnIndex, event)"
+          @mouse-drop="(event) => dropCard(columnIndex, column.cards.length, event)"
+        />
+        <Text
+          v-if="
+            !column.cards.length && !(dragActive && dropColumn === columnIndex && dropIndex === 0)
+          "
+          fg="#7f8a96"
+          >No cards</Text
+        >
       </Box>
     </Box>
 
@@ -319,13 +400,36 @@ onKeyDown((key) => {
     </Box>
 
     <Box
+      v-if="dragActive && draggedCardData"
+      position="absolute"
+      :left="dragGhostLeft"
+      :top="dragGhostTop"
+      :width="dragCardWidth"
+      :height="CARD_HEIGHT"
+      :zIndex="100"
+      flexDirection="column"
+      :border="true"
+      borderStyle="rounded"
+      borderColor="#ffffff"
+      backgroundColor="#26323b"
+      :opacity="0.9"
+      :paddingX="1"
+      overflow="hidden"
+    >
+      <Text bold fg="#e7edf3" :selectable="false">{{ draggedCardData.title }}</Text>
+      <Text :fg="priorityColor(draggedCardData.priority)" :selectable="false"
+        >{{ draggedCardData.priority.toUpperCase() }} · {{ draggedCardData.tag }}</Text
+      >
+    </Box>
+
+    <Box
       v-if="modal"
       position="absolute"
       top="30%"
       left="20%"
       width="60%"
       :height="8"
-      :zIndex="10"
+      :zIndex="200"
       flexDirection="column"
       :border="true"
       borderStyle="double"
