@@ -1,5 +1,15 @@
 <script setup lang="ts">
-import { Box, Input, onKeyDown, ref, Text, useExit, useTerminalSize, useTitle } from 'vue-termui'
+import {
+  Box,
+  Input,
+  onKeyDown,
+  ref,
+  Text,
+  useExit,
+  useTerminalSize,
+  useTitle,
+  type MouseEvent,
+} from 'vue-termui'
 
 interface Card {
   id: number
@@ -12,6 +22,11 @@ interface Column {
   title: string
   color: string
   cards: Card[]
+}
+
+interface DraggedCard {
+  cardId: number
+  sourceColumn: number
 }
 
 const columns = ref<Column[]>([
@@ -52,6 +67,9 @@ const selections = ref([0, 0, 0, 0])
 const modal = ref<'add' | 'edit' | null>(null)
 const draft = ref('')
 const nextId = ref(9)
+const draggedCard = ref<DraggedCard | null>(null)
+const dropColumn = ref<number | null>(null)
+const dropIndex = ref<number | null>(null)
 const exit = useExit()
 const { width } = useTerminalSize()
 useTitle('VueBoard')
@@ -123,6 +141,80 @@ function priorityColor(priority: Card['priority']): string {
   return priority === 'high' ? '#e06c75' : priority === 'medium' ? '#e5c07b' : '#7f8a96'
 }
 
+function selectCard(columnIndex: number, cardIndex: number): void {
+  activeColumn.value = columnIndex
+  selections.value[columnIndex] = cardIndex
+}
+
+function startDrag(columnIndex: number, cardIndex: number, event: MouseEvent): void {
+  if (event.button !== 0) return
+  const card = columns.value[columnIndex]?.cards[cardIndex]
+  if (!card) return
+
+  selectCard(columnIndex, cardIndex)
+  draggedCard.value = { cardId: card.id, sourceColumn: columnIndex }
+  dropColumn.value = columnIndex
+  dropIndex.value = cardIndex
+  event.stopPropagation()
+}
+
+function dragOverColumn(columnIndex: number, event: MouseEvent): void {
+  if (!draggedCard.value) return
+  dropColumn.value = columnIndex
+  dropIndex.value = columns.value[columnIndex]?.cards.length ?? 0
+  event.stopPropagation()
+}
+
+function dragOverCard(columnIndex: number, cardIndex: number, event: MouseEvent): void {
+  if (!draggedCard.value) return
+  dropColumn.value = columnIndex
+  dropIndex.value = cardIndex
+  event.stopPropagation()
+}
+
+function dropCard(columnIndex: number, targetIndex: number, event: MouseEvent): void {
+  const dragged = draggedCard.value
+  if (!dragged) return
+
+  const source = columns.value[dragged.sourceColumn]
+  const destination = columns.value[columnIndex]
+  const sourceIndex = source?.cards.findIndex((card) => card.id === dragged.cardId) ?? -1
+  if (!source || !destination || sourceIndex < 0) return
+
+  const [card] = source.cards.splice(sourceIndex, 1)
+  if (!card) return
+
+  const insertionIndex = Math.max(
+    0,
+    Math.min(
+      targetIndex - (source === destination && sourceIndex < targetIndex ? 1 : 0),
+      destination.cards.length,
+    ),
+  )
+  destination.cards.splice(insertionIndex, 0, card)
+
+  selections.value[dragged.sourceColumn] = Math.max(
+    0,
+    Math.min(selections.value[dragged.sourceColumn] ?? 0, source.cards.length - 1),
+  )
+  activeColumn.value = columnIndex
+  selections.value[columnIndex] = insertionIndex
+  draggedCard.value = null
+  dropColumn.value = null
+  dropIndex.value = null
+  event.stopPropagation()
+}
+
+function finishDrag(): void {
+  // OpenTUI emits drag-end immediately before drop, so defer cleanup until the
+  // drop target has had a chance to move the card.
+  queueMicrotask(() => {
+    draggedCard.value = null
+    dropColumn.value = null
+    dropIndex.value = null
+  })
+}
+
 onKeyDown((key) => {
   if (modal.value) {
     if (key.name === 'escape') modal.value = null
@@ -158,33 +250,60 @@ onKeyDown((key) => {
         :width="'25%'"
         :border="true"
         borderStyle="rounded"
-        :borderColor="activeColumn === columnIndex ? column.color : '#46505a'"
+        :borderColor="
+          dropColumn === columnIndex
+            ? '#ffffff'
+            : activeColumn === columnIndex
+              ? column.color
+              : '#46505a'
+        "
         :title="` ${column.title} · ${column.cards.length} `"
         :titleColor="column.color"
         :paddingX="1"
         overflow="hidden"
+        @mouse-over="(event) => dragOverColumn(columnIndex, event)"
+        @mouse-drop="(event) => dropCard(columnIndex, column.cards.length, event)"
       >
         <Box
           v-for="(card, cardIndex) in column.cards"
           :key="card.id"
           flexDirection="column"
-          :border="activeColumn === columnIndex && selections[columnIndex] === cardIndex"
+          :height="5"
+          :flexShrink="0"
+          :border="true"
           borderStyle="rounded"
-          :borderColor="column.color"
+          :borderColor="
+            draggedCard?.cardId === card.id
+              ? '#ffffff'
+              : dropColumn === columnIndex && dropIndex === cardIndex
+                ? '#ffffff'
+                : activeColumn === columnIndex && selections[columnIndex] === cardIndex
+                  ? column.color
+                  : '#46505a'
+          "
           :backgroundColor="
-            activeColumn === columnIndex && selections[columnIndex] === cardIndex
-              ? '#26323b'
-              : '#171c22'
+            draggedCard?.cardId === card.id
+              ? '#33414d'
+              : activeColumn === columnIndex && selections[columnIndex] === cardIndex
+                ? '#26323b'
+                : '#171c22'
           "
           :paddingX="1"
           :marginBottom="1"
+          overflow="hidden"
+          @mouse-down="(event) => startDrag(columnIndex, cardIndex, event)"
+          @mouse-up="finishDrag"
+          @mouse-drag-end="finishDrag"
+          @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
+          @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
         >
           <Text
             :bold="activeColumn === columnIndex && selections[columnIndex] === cardIndex"
             fg="#e7edf3"
+            :selectable="false"
             >{{ card.title }}</Text
           >
-          <Text :fg="priorityColor(card.priority)"
+          <Text :fg="priorityColor(card.priority)" :selectable="false"
             >{{ card.priority.toUpperCase() }} · {{ card.tag }}</Text
           >
         </Box>
@@ -193,7 +312,9 @@ onKeyDown((key) => {
     </Box>
 
     <Box flexDirection="row" justifyContent="space-between" backgroundColor="#202830" :paddingX="1">
-      <Text fg="#d6dde5">←→/hl column · ↑↓/jk card · m move · a add · e edit · d delete</Text>
+      <Text fg="#d6dde5"
+        >drag cards · ←→/hl column · ↑↓/jk card · m move · a add · e edit · d delete</Text
+      >
       <Text fg="#7f8a96">{{ width }} cols · q quit</Text>
     </Box>
 
