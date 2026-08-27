@@ -18,6 +18,7 @@ import {
   useTerminalSize,
   type MouseEvent,
   type ScrollBoxElement,
+  type TextareaProps,
 } from 'vue-termui'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -118,6 +119,10 @@ const markdownStyle = SyntaxStyle.fromStyles({
   'diff.minus': { fg: '#f85149' },
   conceal: { fg: '#6e7681' },
 })
+const bodyEditorKeyBindings = [
+  { name: 'return', meta: true, action: 'newline' },
+  { name: 'kpenter', meta: true, action: 'newline' },
+] satisfies NonNullable<TextareaProps['keyBindings']>
 
 const columns = computed(() => project.value?.columns ?? [])
 const cardCount = computed(() =>
@@ -437,7 +442,13 @@ function finishDrag(): void {
 onKeyDown((key) => {
   if (detailCard.value) {
     if (editingBody.value) {
-      if (key.name === 'escape') editingBody.value = false
+      if (key.name === 's' && key.ctrl) {
+        key.preventDefault()
+        key.stopPropagation()
+        void saveBody(bodyDraft.value)
+      } else if (key.name === 'escape') {
+        editingBody.value = false
+      }
       return
     }
     if (key.name === 'e') {
@@ -657,6 +668,7 @@ onMounted(() => void load())
         width="100%"
         :flexGrow="1"
         :flexShrink="1"
+        :keyBindings="bodyEditorKeyBindings"
         autofocus
         wrapMode="word"
         placeholder="Write the ticket body in Markdown…"
@@ -664,8 +676,8 @@ onMounted(() => void load())
         focusedBackgroundColor="#161b22"
         textColor="#e6edf3"
         cursorColor="#58a6ff"
-        @submit="saveBody"
       />
+      <Text v-if="editingBody && error" fg="#e06c75">{{ error }}</Text>
       <ScrollBox
         v-else
         :flexGrow="1"
@@ -694,7 +706,7 @@ onMounted(() => void load())
           />
         </Box>
       </ScrollBox>
-      <Text v-if="editingBody" fg="#8b949e">⌘/Meta+Enter save · esc cancel</Text>
+      <Text v-if="editingBody" fg="#8b949e">Ctrl+S save · esc cancel</Text>
       <Text v-else fg="#8b949e">↑↓/jk/page scroll · e edit body · esc/enter close</Text>
     </Box>
 
