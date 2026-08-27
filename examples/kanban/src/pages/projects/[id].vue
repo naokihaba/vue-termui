@@ -3,14 +3,18 @@ import {
   Box,
   computed,
   Input,
+  nextTick,
   onKeyDown,
   onMounted,
   ref,
+  ScrollBox,
+  shallowRef,
   Text,
   useExit,
   useRenderer,
   useTerminalSize,
   type MouseEvent,
+  type ScrollBoxElement,
 } from 'vue-termui'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -31,6 +35,7 @@ interface DraggedCard {
 }
 
 const CARD_HEIGHT = 5
+const COLUMN_WIDTH = 32
 const STRIPED_BORDER = {
   topLeft: '╭',
   topRight: '╮',
@@ -67,6 +72,8 @@ const dragY = ref(0)
 const dragCardWidth = ref(16)
 const dropColumn = ref<number | null>(null)
 const dropIndex = ref<number | null>(null)
+const boardScroller = shallowRef<ScrollBoxElement | null>(null)
+const columnScrollers = new Map<number, ScrollBoxElement>()
 const exit = useExit()
 const renderer = useRenderer()
 const { width, height } = useTerminalSize()
@@ -75,7 +82,9 @@ const columns = computed(() => project.value?.columns ?? [])
 const cardCount = computed(() =>
   columns.value.reduce((count, column) => count + column.cards.length, 0),
 )
-const columnWidth = computed(() => `${100 / Math.max(columns.value.length, 1)}%` as `${number}%`)
+const boardWidth = computed(() =>
+  Math.max(width.value - 2, columns.value.length * COLUMN_WIDTH + columns.value.length - 1),
+)
 const draggedCardData = computed(() => {
   const dragged = draggedCard.value
   if (!dragged) return undefined
@@ -90,6 +99,31 @@ const dragGhostTop = computed(() =>
   Math.max(0, Math.min(dragY.value - 2, height.value - CARD_HEIGHT)),
 )
 
+function scrollBoxElement(instance: unknown): ScrollBoxElement | null {
+  if (!instance || typeof instance !== 'object') return null
+  if ('$el' in instance) return (instance as { $el: ScrollBoxElement }).$el
+  return instance as ScrollBoxElement
+}
+
+function setBoardScroller(instance: unknown): void {
+  boardScroller.value = scrollBoxElement(instance)
+}
+
+function setColumnScroller(columnIndex: number, instance: unknown): void {
+  const element = scrollBoxElement(instance)
+  if (element) columnScrollers.set(columnIndex, element)
+  else columnScrollers.delete(columnIndex)
+}
+
+async function revealSelection(): Promise<void> {
+  await nextTick()
+  const columnIndex = activeColumn.value
+  boardScroller.value?.scrollChildIntoView(`kanban-column-${columnIndex}`)
+  const cardIndex = selections.value[columnIndex] ?? 0
+  const card = columns.value[columnIndex]?.cards[cardIndex]
+  if (card) columnScrollers.get(columnIndex)?.scrollChildIntoView(`kanban-card-${card.id}`)
+}
+
 async function load(): Promise<void> {
   const selected = connection.value
   if (!selected) {
@@ -102,6 +136,7 @@ async function load(): Promise<void> {
     project.value = await fetchProject(selected)
     selections.value = project.value.columns.map((_, index) => selections.value[index] ?? 0)
     activeColumn.value = Math.min(activeColumn.value, Math.max(project.value.columns.length - 1, 0))
+    await revealSelection()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -132,6 +167,7 @@ function currentCard(): ProjectCard | undefined {
 function moveColumn(step: number): void {
   if (!columns.value.length) return
   activeColumn.value = (activeColumn.value + step + columns.value.length) % columns.value.length
+  void revealSelection()
 }
 
 function moveCard(step: number): void {
@@ -139,6 +175,7 @@ function moveCard(step: number): void {
   if (!cards.length) return
   const index = selections.value[activeColumn.value] ?? 0
   selections.value[activeColumn.value] = (index + step + cards.length) % cards.length
+  void revealSelection()
 }
 
 async function moveToColumn(
@@ -168,6 +205,7 @@ async function moveToColumn(
   const afterId = destinationCards[adjustedIndex - 1]?.id ?? null
   activeColumn.value = targetColumn
   selections.value[targetColumn] = adjustedIndex
+  void revealSelection()
   await sync(async () => {
     if (sourceColumn !== targetColumn && board.statusFieldId) {
       await setCardStatus(board.id, card.id, board.statusFieldId!, destination.id)
@@ -229,6 +267,7 @@ async function remove(): Promise<void> {
 function selectCard(columnIndex: number, cardIndex: number): void {
   activeColumn.value = columnIndex
   selections.value[columnIndex] = cardIndex
+  void revealSelection()
 }
 
 function startDrag(columnIndex: number, cardIndex: number, event: MouseEvent): void {
@@ -251,6 +290,10 @@ function moveDrag(event: MouseEvent): void {
   dragActive.value = true
   dragX.value = event.x
   dragY.value = event.y
+  boardScroller.value?.updateAutoScroll(event.x, event.y)
+  if (dropColumn.value !== null) {
+    columnScrollers.get(dropColumn.value)?.updateAutoScroll(event.x, event.y)
+  }
   event.stopPropagation()
 }
 
@@ -284,6 +327,8 @@ function dropCard(columnIndex: number, targetIndex: number, event: MouseEvent): 
 }
 
 function finishDrag(): void {
+  boardScroller.value?.stopAutoScroll()
+  for (const scroller of columnScrollers.values()) scroller.stopAutoScroll()
   queueMicrotask(() => {
     draggedCard.value = null
     dragActive.value = false
@@ -324,32 +369,97 @@ onMounted(() => void load())
       <Text fg="#7f8a96">{{ cardCount }} items</Text>
     </Box>
 
-    <Box v-if="project" flexDirection="row" :flexGrow="1" :gap="1" :padding="1" overflow="hidden">
-      <Box
-        v-for="(column, columnIndex) in columns"
-        :key="column.id || 'none'"
-        flexDirection="column"
-        :width="columnWidth"
-        :border="true"
-        borderStyle="rounded"
-        :borderColor="
-          dropColumn === columnIndex
-            ? '#ffffff'
-            : activeColumn === columnIndex
-              ? column.color
-              : '#46505a'
-        "
-        :title="` ${column.title} · ${column.cards.length} `"
-        :titleColor="column.color"
-        :paddingX="1"
-        overflow="hidden"
-        @mouse-drag="moveDrag"
-        @mouse-over="(event) => dragOverColumn(columnIndex, event)"
-        @mouse-drop="(event) => dropCard(columnIndex, column.cards.length, event)"
-      >
-        <Box v-for="(card, cardIndex) in column.cards" :key="card.id" flexDirection="column">
+    <ScrollBox
+      v-if="project"
+      :ref="setBoardScroller"
+      :flexGrow="1"
+      :flexShrink="1"
+      :scrollX="true"
+      :scrollY="false"
+      :focusable="false"
+      :padding="1"
+      overflow="hidden"
+    >
+      <Box flexDirection="row" :width="boardWidth" height="100%" :gap="1" :flexShrink="0">
+        <ScrollBox
+          v-for="(column, columnIndex) in columns"
+          :id="`kanban-column-${columnIndex}`"
+          :key="column.id || 'none'"
+          :ref="(instance) => setColumnScroller(columnIndex, instance)"
+          :width="COLUMN_WIDTH"
+          height="100%"
+          :flexShrink="0"
+          :border="true"
+          borderStyle="rounded"
+          :borderColor="
+            dropColumn === columnIndex
+              ? '#ffffff'
+              : activeColumn === columnIndex
+                ? column.color
+                : '#46505a'
+          "
+          :title="` ${column.title} · ${column.cards.length} `"
+          :titleColor="column.color"
+          :paddingX="1"
+          :scrollX="false"
+          :scrollY="true"
+          :focusable="false"
+          overflow="hidden"
+          @mouse-drag="moveDrag"
+          @mouse-over="(event) => dragOverColumn(columnIndex, event)"
+          @mouse-drop="(event) => dropCard(columnIndex, column.cards.length, event)"
+        >
+          <Box v-for="(card, cardIndex) in column.cards" :key="card.id" flexDirection="column">
+            <Box
+              v-if="dragActive && dropColumn === columnIndex && dropIndex === cardIndex"
+              :height="CARD_HEIGHT"
+              :flexShrink="0"
+              :border="true"
+              :customBorderChars="STRIPED_BORDER"
+              borderColor="#8b949e"
+              :shouldFill="false"
+              :marginBottom="1"
+              @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
+              @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
+            />
+            <Box
+              :id="`kanban-card-${card.id}`"
+              flexDirection="column"
+              :height="CARD_HEIGHT"
+              :flexShrink="0"
+              :border="true"
+              borderStyle="rounded"
+              :borderColor="
+                activeColumn === columnIndex && selections[columnIndex] === cardIndex
+                  ? column.color
+                  : '#46505a'
+              "
+              :backgroundColor="
+                activeColumn === columnIndex && selections[columnIndex] === cardIndex
+                  ? '#26323b'
+                  : '#171c22'
+              "
+              :opacity="dragActive && draggedCard?.cardId === card.id ? 0.35 : 1"
+              :paddingX="1"
+              :marginBottom="1"
+              overflow="hidden"
+              @mouse-down="(event) => startDrag(columnIndex, cardIndex, event)"
+              @mouse-up="finishDrag"
+              @mouse-drag-end="finishDrag"
+              @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
+              @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
+            >
+              <Text
+                :bold="activeColumn === columnIndex && selections[columnIndex] === cardIndex"
+                fg="#e7edf3"
+                :selectable="false"
+                >{{ card.title }}</Text
+              >
+              <Text fg="#7f8a96" :selectable="false">{{ card.subtitle }}</Text>
+            </Box>
+          </Box>
           <Box
-            v-if="dragActive && dropColumn === columnIndex && dropIndex === cardIndex"
+            v-if="dragActive && dropColumn === columnIndex && dropIndex === column.cards.length"
             :height="CARD_HEIGHT"
             :flexShrink="0"
             :border="true"
@@ -357,64 +467,17 @@ onMounted(() => void load())
             borderColor="#8b949e"
             :shouldFill="false"
             :marginBottom="1"
-            @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
-            @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
+            @mouse-over="(event) => dragOverColumn(columnIndex, event)"
+            @mouse-drop="(event) => dropCard(columnIndex, column.cards.length, event)"
           />
-          <Box
-            :id="`kanban-card-${card.id}`"
-            flexDirection="column"
-            :height="CARD_HEIGHT"
-            :flexShrink="0"
-            :border="true"
-            borderStyle="rounded"
-            :borderColor="
-              activeColumn === columnIndex && selections[columnIndex] === cardIndex
-                ? column.color
-                : '#46505a'
-            "
-            :backgroundColor="
-              activeColumn === columnIndex && selections[columnIndex] === cardIndex
-                ? '#26323b'
-                : '#171c22'
-            "
-            :opacity="dragActive && draggedCard?.cardId === card.id ? 0.35 : 1"
-            :paddingX="1"
-            :marginBottom="1"
-            overflow="hidden"
-            @mouse-down="(event) => startDrag(columnIndex, cardIndex, event)"
-            @mouse-up="finishDrag"
-            @mouse-drag-end="finishDrag"
-            @mouse-over="(event) => dragOverCard(columnIndex, cardIndex, event)"
-            @mouse-drop="(event) => dropCard(columnIndex, cardIndex, event)"
+          <Text
+            v-if="!column.cards.length && !(dragActive && dropColumn === columnIndex)"
+            fg="#7f8a96"
+            >No items</Text
           >
-            <Text
-              :bold="activeColumn === columnIndex && selections[columnIndex] === cardIndex"
-              fg="#e7edf3"
-              :selectable="false"
-              >{{ card.title }}</Text
-            >
-            <Text fg="#7f8a96" :selectable="false">{{ card.subtitle }}</Text>
-          </Box>
-        </Box>
-        <Box
-          v-if="dragActive && dropColumn === columnIndex && dropIndex === column.cards.length"
-          :height="CARD_HEIGHT"
-          :flexShrink="0"
-          :border="true"
-          :customBorderChars="STRIPED_BORDER"
-          borderColor="#8b949e"
-          :shouldFill="false"
-          :marginBottom="1"
-          @mouse-over="(event) => dragOverColumn(columnIndex, event)"
-          @mouse-drop="(event) => dropCard(columnIndex, column.cards.length, event)"
-        />
-        <Text
-          v-if="!column.cards.length && !(dragActive && dropColumn === columnIndex)"
-          fg="#7f8a96"
-          >No items</Text
-        >
+        </ScrollBox>
       </Box>
-    </Box>
+    </ScrollBox>
 
     <Box v-else :flexGrow="1" justifyContent="center" alignItems="center">
       <Text :fg="error ? '#e06c75' : '#7f8a96'">{{ error || 'Loading project…' }}</Text>
@@ -427,7 +490,9 @@ onMounted(() => void load())
       :paddingX="1"
       :flexShrink="0"
     >
-      <Text fg="#d6dde5">drag · arrows/hjkl · m move · a add · e edit · d remove · r refresh</Text>
+      <Text fg="#d6dde5"
+        >drag/scroll · arrows/hjkl · m move · a add · e edit · d remove · r refresh</Text
+      >
       <Text fg="#7f8a96">b projects · q quit</Text>
     </Box>
 
